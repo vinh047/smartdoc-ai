@@ -1,0 +1,25 @@
+# Frontend
+streamlit
+
+# LangChain Ecosystem
+langchain
+langchain-community
+langchain-text-splitters
+langchain_huggingface
+langchain-ollama
+
+# Vector Database & Embeddings
+faiss-cpu
+faiss-gpu
+transformers
+sentence-transformers
+
+# Document Processing
+pdfplumber
+docx2txt
+
+# Data & Machine Learning Base
+numpy
+pandas
+torch
+
