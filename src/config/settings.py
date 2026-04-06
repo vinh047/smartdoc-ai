@@ -1,28 +1,52 @@
 import os
 
-# 1. Cấu hình xử lý tài liệu (Document Processing)
-TEXT_SPLITTER_CONFIG = {
-    "chunk_size": 1000,       # Kích thước tối đa mỗi đoạn
-    "chunk_overlap": 100      # Số ký tự chồng lấp giữa các đoạn
-}
+# ==========================================
+# 0. Cấu hình Hệ thống & Lưu trữ
+# ==========================================
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# 2. Cấu hình mô hình nhúng (Embedding Model)
+DB_PATH = f"sqlite:///{os.path.join(DATA_DIR, 'smartdoc.db')}"
+FAISS_INDEX_PATH = os.path.join(DATA_DIR, "faiss_index")
+
+# ==========================================
+# 1. Cấu hình Mặc định Xử lý tài liệu (Có thể ghi đè từ UI)
+# ==========================================
+DEFAULT_CHUNK_SIZE = 1500
+DEFAULT_CHUNK_OVERLAP = 200
+
+# ==========================================
+# 2. Cấu hình Embeddings & Re-ranking
+# ==========================================
 EMBEDDING_CONFIG = {
-    "model_name": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", # Hỗ trợ tiếng Việt
-    "device": "cpu",          # Đổi thành 'cuda' nếu cậu dùng GPU có CUDA
-    "normalize_embeddings": True
+    "model_name": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+    "device": "cpu",
+    "normalize_embeddings": True,
 }
 
-# 3. Cấu hình bộ máy tìm kiếm (Retriever)
+RERANKER_CONFIG = {
+    # Dùng BAAI/bge-reranker-base cho đa ngôn ngữ cực tốt, hoặc ms-marco cho nhẹ
+    "model_name": "BAAI/bge-reranker-base",
+    "top_n": 3,  # Lấy 3 đoạn văn chuẩn nhất sau khi rerank
+}
+
+# ==========================================
+# 3. Cấu hình Hybrid Search (BM25 + FAISS)
+# ==========================================
 RETRIEVER_CONFIG = {
-    "search_type": "similarity", # Có thể đổi thành "mmr" để lấy kết quả đa dạng hơn
-    "k": 3                      # Số lượng kết quả lấy ra (cậu đang dùng 10, mặc định dự án là 3)
+    "search_type": "similarity",
+    "k_fetch": 10,  # Lấy dư ra từ mỗi DB để Re-ranker lọc lại
+    "faiss_weight": 0.5,
+    "bm25_weight": 0.5,
 }
 
-# 4. Cấu hình mô hình ngôn ngữ lớn (LLM)
+# ==========================================
+# 4. Cấu hình LLM
+# ==========================================
 LLM_CONFIG = {
-    "model": "qwen2.5:7b",       # Mô hình Qwen
-    "temperature": 0.7,          # Độ sáng tạo
-    "top_p": 0.9,                # Lấy mẫu Nucleus
-    "repeat_penalty": 1.1        # Tránh lặp từ
+    "model": "qwen2.5:7b",
+    "temperature": 0.4,  # Rất thấp để tránh ảo giác (Hallucination)
+    "top_p": 0.9,
+    "repeat_penalty": 1.1,
 }

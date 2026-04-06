@@ -1,5 +1,9 @@
-# Frontend
-streamlit
+# Frontend Framework
+streamlit>=1.30.0
+streamlit-option-menu
+
+# Database (SQL ORM)
+SQLAlchemy>=2.0.0
 
 # LangChain Ecosystem
 langchain
@@ -8,11 +12,14 @@ langchain-text-splitters
 langchain_huggingface
 langchain-ollama
 
-# Vector Database & Embeddings
+# Vector Database, Embeddings & Reranking
 faiss-cpu
-faiss-gpu
 transformers
 sentence-transformers
+rank_bm25
+
+# Web Search Fallback
+duckduckgo-search
 
 # Document Processing
 pdfplumber
@@ -22,4 +29,4 @@ docx2txt
 numpy
 pandas
 torch
-
+torchvision

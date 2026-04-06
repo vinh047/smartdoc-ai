@@ -1,157 +1,164 @@
 import streamlit as st
 import os
+import warnings
 
-# Import logic xử lý lõi
-from src.core import process_document
-from src.core import run_rag_chain
+from src.core.document_processor import load_stores
+from src.core.database import init_db, get_messages_by_session, add_message
+from src.ui.components import render_sidebar, render_header
+from src.engines.main_dispatcher import execute_query
 
-# Import các hàm tương tác Database
-from src.core.database import (
-    init_db, 
-    create_new_session, 
-    get_all_sessions,
-    add_message, 
-    get_messages_by_session
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+warnings.filterwarnings("ignore")
+
+# --- 1. CẤU HÌNH TRANG & CSS GIAO DIỆN CHUYÊN NGHIỆP ---
+# Bỏ icon để tạo sự tinh gọn
+st.set_page_config(page_title="SmartDoc System", layout="wide")
+
+# CSS Tiêm vào để tùy biến UI sang phong cách Enterprise
+# Fix lỗi align: Dùng cú pháp chuẩn xác kết hợp với class user-msg
+st.markdown(
+    """
+<style>
+    /* Ẩn main menu và footer mặc định của Streamlit cho chuyên nghiệp */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+
+    /* Thiết kế cho tin nhắn của User (Bên phải, màu nền xám nhạt chuyên nghiệp) */
+    div[data-testid="stChatMessage"]:has(span.user-msg) {
+        flex-direction: row-reverse;
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        margin-left: auto;
+        margin-right: 0;
+        width: fit-content;
+        max-width: 85%;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+
+    div[data-testid="stChatMessage"]:has(span.user-msg) div[data-testid="stMarkdownContainer"] {
+        text-align: right;
+        color: #212529;
+    }
+
+    /* Ẩn avatar người dùng để tạo cảm giác giống MS Teams / Slack hiện đại */
+    div[data-testid="stChatMessage"]:has(span.user-msg) div[data-testid="chatAvatarIcon-user"] {
+        display: none;
+    }
+    div[data-testid="stChatMessage"]:has(span.user-msg) div.st-emotion-cache-1ebukzx {
+        display: none;
+    }
+
+    /* Thiết kế cho tin nhắn của AI Assistant (Bên trái, nền trắng) */
+    div[data-testid="stChatMessage"]:not(:has(span.user-msg)) {
+        background-color: #ffffff;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        margin-right: auto;
+        margin-left: 0;
+        max-width: 90%;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    }
+
+    /* Làm gọn lại các nút expander */
+    .streamlit-expanderHeader {
+        font-size: 0.9rem;
+        color: #495057;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
-# Import các component UI
-from src.ui import (
-    render_sidebar,
-    render_header,
-    render_file_uploader
-)
 
-# 1. Khởi tạo Database (Chỉ chạy 1 lần để tạo file .db nếu chưa có)
-init_db()
+# --- 2. KHỞI TẠO STATE ---
+@st.cache_resource(show_spinner="Đang khởi tạo hệ thống truy xuất...")
+def setup_system():
+    init_db()
+    return load_stores()
 
-@st.cache_resource(show_spinner=False)
-def load_and_cache_document(file_path):
-    """Hàm này sẽ lưu kết quả xử lý PDF vào RAM, không chạy lại ở các lần click sau"""
-    return process_document(file_path)
 
-# Cấu hình cơ bản
-st.set_page_config(page_title="SmartDoc AI", page_icon="📄", layout="wide")
+if "system_initialized" not in st.session_state:
+    st.session_state.vector_store, st.session_state.bm25_retriever = setup_system()
+    st.session_state.system_initialized = True
 
-# 2. Khởi tạo các State cần thiết
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "current_session_id" not in st.session_state:
     st.session_state.current_session_id = None
+if "selected_files" not in st.session_state:
+    st.session_state.selected_files = []
 
-# 3. Khu vực Sidebar (Quản lý Phiên trò chuyện & Tài liệu)
-with st.sidebar:
-    render_sidebar()
-    
-    st.divider()
-    st.markdown("### 💬 Lịch sử trò chuyện")
-    
-    # Nút tạo Phiên trò chuyện mới
-    if st.button("➕ Cuộc trò chuyện mới", type="primary", use_container_width=True):
-        new_id = create_new_session("Phiên chat mới")
-        st.session_state.current_session_id = new_id
-        st.session_state.messages = []
-        st.rerun()
-
-    st.markdown("**Các phiên gần đây:**")
-    # Lấy danh sách sessions từ DB và render thành các nút bấm
-    sessions = get_all_sessions()
-    for sess in sessions:
-        btn_label = f"📝 {sess['title']} ({sess['created_at'][:10]})"
-        if st.button(btn_label, key=sess['id'], use_container_width=True):
-            st.session_state.current_session_id = sess['id']
-            st.session_state.messages = get_messages_by_session(sess['id'])
-            st.rerun()
-            
-    st.divider()
-    st.markdown("### 🛠️ Quản lý tài liệu")
-    if st.button("🔄 Xóa tài liệu (Upload lại)", use_container_width=True):
-        st.session_state.vector_store = None
-        st.rerun()
-
-# 4. Render Header
+# --- 3. RENDER GIAO DIỆN ---
 render_header()
+render_sidebar()
 
-# 5. Khu vực Upload
-uploaded_file = render_file_uploader()
+# KHUNG CHAT CHÍNH
+if st.session_state.current_session_id:
+    st.session_state.messages = get_messages_by_session(
+        st.session_state.current_session_id
+    )
 
-if uploaded_file is not None and st.session_state.vector_store is None:
-    with st.spinner("Đang xử lý tài liệu (Splitting & Embedding)..."):
-        temp_path = f"temp_{uploaded_file.name}"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
-        # Gọi logic xử lý file
-        st.session_state.vector_store = load_and_cache_document(temp_path)
-        
-        os.remove(temp_path)
-        st.success("Tài liệu đã được xử lý thành công! Hãy đặt câu hỏi bên dưới.")
-
-# 6. Khu vực Hỏi Đáp (Giao diện Chatbot)
-if st.session_state.vector_store is not None:
-    st.divider()
-    st.subheader("💬 Trò chuyện với tài liệu")
-    
-    if st.session_state.current_session_id is None:
-        st.session_state.current_session_id = create_new_session("Phiên chat mới")
-    
-    # 6.1 Hiển thị lại toàn bộ lịch sử chat ở màn hình chính
-    for msg in st.session_state.messages:
+# Hiển thị tin nhắn
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
         if msg["role"] == "user":
-            st.markdown(f"""
-                <div style="display: flex; justify-content: flex-end; margin-bottom: 1rem;">
-                    <div style="background-color: #007BFF; color: white; padding: 10px 16px; border-radius: 20px 20px 4px 20px; max-width: 75%; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
-                        {msg['content']}
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
+            # Gắn cờ <span> để CSS ép lề phải
+            st.markdown(
+                f'<span class="user-msg"></span>{msg["content"]}',
+                unsafe_allow_html=True,
+            )
         else:
-            with st.chat_message("assistant"):
-                st.markdown(msg["content"])
-            
-    # Ô nhập liệu dạng chat
-    user_question = st.chat_input("Nhập câu hỏi của bạn về nội dung tài liệu...")
-    
-    if user_question:
-        # 6.2 Lưu câu hỏi của User vào STATE và DB
-        st.session_state.messages.append({"role": "user", "content": user_question})
-        add_message(st.session_state.current_session_id, "user", user_question)
-        
-        st.markdown(f"""
-            <div style="display: flex; justify-content: flex-end; margin-bottom: 1rem;">
-                <div style="background-color: #007BFF; color: white; padding: 10px 16px; border-radius: 20px 20px 4px 20px; max-width: 75%; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
-                    {user_question}
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
-            
-        # 6.3 Xử lý và hiển thị câu trả lời của AI
-        with st.chat_message("assistant"):
-            recent_messages = st.session_state.messages[-5:-1] if len(st.session_state.messages) > 1 else []
-            chat_history_str = ""
-            for msg in recent_messages:
-                role_name = "Người dùng" if msg["role"] == "user" else "AI"
-                chat_history_str += f"{role_name}: {msg['content']}\n"
-                
-            # Hứng 2 biến: Luồng chữ VÀ danh sách nguồn
-            response_stream, source_docs = run_rag_chain(user_question, st.session_state.vector_store, chat_history_str)
-            
-            # AI nhả chữ ra màn hình
-            full_response = st.write_stream(response_stream)
-            
-            # HIỂN THỊ NGUỒN (CITATIONS)
-            if source_docs:
-                with st.expander("📚 Xem nguồn trích dẫn"):
-                    for i, doc in enumerate(source_docs):
-                        # PDFPlumber tự động lấy số trang (bắt đầu từ 0)
-                        page_num = doc.metadata.get('page', 0) + 1 
-                        file_name = os.path.basename(doc.metadata.get('source', 'Tài liệu'))
-                        
-                        st.markdown(f"**Nguồn {i+1} (Trang {page_num} - `{file_name}`)**")
-                        # Hiển thị 150 ký tự đầu tiên để người dùng kiểm chứng
-                        st.caption(f"_{doc.page_content[:150]}..._")
-                
-        # 6.4 Lưu câu trả lời của AI vào STATE và DB
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
-        add_message(st.session_state.current_session_id, "assistant", full_response)
+            st.markdown(msg["content"])
+
+# Input Chat
+user_question = st.chat_input(
+    "Nhập câu hỏi truy vấn dữ liệu (vd: Tóm tắt chương 1, So sánh...)"
+)
+
+if user_question:
+    # 1. Hiện câu hỏi của user
+    st.session_state.messages.append({"role": "user", "content": user_question})
+    add_message(st.session_state.current_session_id, "user", user_question)
+
+    with st.chat_message("user"):
+        st.markdown(
+            f'<span class="user-msg"></span>{user_question}', unsafe_allow_html=True
+        )
+
+    # 2. Xử lý câu trả lời
+    with st.chat_message("assistant"):
+        history_str = "\n".join(
+            [f"{m['role']}: {m['content']}" for m in st.session_state.messages[-5:]]
+        )
+
+        response_stream, source_docs, meta_info = execute_query(
+            query=user_question,
+            history_str=history_str,
+            vector_store=st.session_state.vector_store,
+            bm25_retriever=st.session_state.bm25_retriever,
+            session_id=st.session_state.current_session_id,
+            selected_files=st.session_state.selected_files,
+        )
+
+        full_response = st.write_stream(response_stream)
+
+        # Hiển thị Citation (Trích dẫn) chuyên nghiệp
+        if source_docs:
+            with st.expander("Nguồn trích dẫn & Thông tin tham chiếu"):
+                for i, doc in enumerate(source_docs):
+                    file_name = doc.metadata.get("source", "Không rõ nguồn")
+                    page = doc.metadata.get("page", 0) + 1
+                    st.markdown(f"**[{i + 1}] Tài liệu: `{file_name}` (Trang {page})**")
+                    st.caption(f"Trích đoạn: {doc.page_content}")
+                    st.markdown("---")
+
+    # 3. Lưu DB
+    st.session_state.messages.append(
+        {"role": "assistant", "content": full_response, "meta_data": meta_info}
+    )
+    add_message(
+        st.session_state.current_session_id, "assistant", full_response, meta_info
+    )
