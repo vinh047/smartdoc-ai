@@ -23,3 +23,6 @@ numpy
 pandas
 torch
 
+# Search Algorithms 
+rank-bm25
+

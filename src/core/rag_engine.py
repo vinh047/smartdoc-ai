@@ -2,8 +2,25 @@ from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
 
 from src.config import LLM_CONFIG, RETRIEVER_CONFIG
+
+def setup_hybrid_retriever(vector_store, documents=mock_docs):
+    # Khởi tạo BM25 Retriever
+    bm25_retriever = BM25Retriever.from_documents(documents)
+    bm25_retriever.k = 3
+    
+    # Khởi tạo FAISS/Vector Retriever
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    
+    # Kết hợp bằng EnsembleRetriever (Tỷ lệ 50-50)
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, vector_retriever],
+        weights=[0.5, 0.5]
+    )
+    return ensemble_retriever
 
 def run_rag_chain(user_question, vector_store, chat_history=""):
     # 1. Khởi tạo LLM
@@ -54,10 +71,7 @@ def run_rag_chain(user_question, vector_store, chat_history=""):
     prompt = get_prompt_template(user_question)
     
     # 3. Cấu hình Retriever
-    retriever = vector_store.as_retriever(
-        search_type=RETRIEVER_CONFIG["search_type"],
-        search_kwargs={"k": RETRIEVER_CONFIG["k"]}
-    )
+    retriever = setup_hybrid_retriever(vector_store)
     
     # Lấy ra danh sách các đoạn text chứa câu trả lời (kèm metadata)
     source_docs = retriever.invoke(user_question)
