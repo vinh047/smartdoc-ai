@@ -1,6 +1,8 @@
+from typing import List, Tuple, Generator
+
+import streamlit as st
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
@@ -81,13 +83,13 @@ def run_rag_chain(user_question, vector_store, chat_history=""):
     
     # 4. Khởi tạo Pipeline chỉ chứa Prompt và LLM
     chain = prompt | llm | StrOutputParser()
-    
-    
-    # Kích hoạt luồng chạy sinh chữ
-    response_stream = chain.stream({
-        "context": context_text,
-        "question": user_question,
-        "chat_history": chat_history
-    })
-    
-    return response_stream, source_docs
+
+    response_stream = chain.stream(
+        {
+            "context": context_text,
+            "question": user_question,
+            "chat_history": chat_history,
+        }
+    )
+
+    return response_stream, reranked_docs, unique_sources

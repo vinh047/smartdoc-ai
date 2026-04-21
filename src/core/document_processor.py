@@ -14,6 +14,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document as LangchainDocument
 
 from src.config import TEXT_SPLITTER_CONFIG, EMBEDDING_CONFIG
+from src.core.metadata_handler import MetadataManager
+
 
 
 def process_document(temp_path, chunk_size=None, chunk_overlap=None):
