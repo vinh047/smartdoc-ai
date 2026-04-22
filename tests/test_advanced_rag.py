@@ -1,67 +1,127 @@
+import pytest
 import json
+from unittest.mock import patch, MagicMock
 from langchain_core.runnables import RunnableLambda
 from langchain_core.documents import Document
 
-from src.core.engines.advanced_rag import run_advanced_rag_pipeline
+from src.core.engines.advanced_rag import (
+    decompose_query,
+    evaluate_with_self_rag,
+    run_advanced_rag_pipeline,
+)
+
+# =====================================================================
+# 1. TEST CÁC HÀM TIỆN ÍCH NHỎ (UNIT TESTS)
+# =====================================================================
 
 
-def test_mock_advanced_rag():
-    print("\n🚀 [GIAI ĐOẠN 1] CHẠY KIỂM THỬ MOCK DATA CHO TV5")
-    print("-" * 60)
+def test_decompose_query():
+    """Kiểm tra: Hàm viết lại câu hỏi có trích xuất đúng JSON từ LLM không."""
 
-    # --- MOCK LLM (Giả lập bằng RunnableLambda để tương thích LCEL LangChain) ---
+    def mock_llm_invoke(prompt):
+        class FakeMsg:
+            content = '["Ý 1 là gì?", "Ý 2 là gì?"]'
+
+        return FakeMsg()
+
+    # Bơm LLM giả vào hàm
+    result = decompose_query("Câu hỏi gốc", RunnableLambda(mock_llm_invoke))
+
+    assert len(result) == 2
+    assert result[0] == "Ý 1 là gì?"
+    assert result[1] == "Ý 2 là gì?"
+
+
+def test_evaluate_with_self_rag():
+    """Kiểm tra: Hàm Self-RAG có bóc tách đúng điểm Confidence Score không."""
+
+    def mock_llm_invoke(prompt):
+        class FakeMsg:
+            content = (
+                '{"confidence_score": 0.95, "suggested_questions": ["Hỏi thêm 1?"]}'
+            )
+
+        return FakeMsg()
+
+    result = evaluate_with_self_rag(
+        "query", "context", "answer", RunnableLambda(mock_llm_invoke)
+    )
+
+    assert result["confidence_score"] == 0.95
+    assert len(result["suggested_questions"]) == 1
+
+
+# =====================================================================
+# 2. TEST TOÀN BỘ PIPELINE (INTEGRATION TEST)
+# =====================================================================
+
+
+@patch("src.core.engines.advanced_rag.setup_hybrid_retriever")
+def test_run_advanced_rag_pipeline(mock_setup_retriever):
+    """
+    Kiểm thử luồng CoRAG hoàn chỉnh: Rewrite -> Retrieve -> Rerank -> Generate -> Evaluate.
+    Áp dụng kỹ thuật Mocking toàn diện để không tốn tài nguyên thật.
+    """
+
+    # --- 2.1 MOCK LLM (Cách của cậu viết siêu hay, tôi giữ nguyên logic) ---
     def mock_llm_invoke(prompt_val):
         prompt_str = str(prompt_val)
 
-        # 1. Bắt ngữ cảnh của Prompt chia nhỏ câu hỏi (Multi-hop)
-        if "CHỈ TRẢ VỀ MẢNG JSON" in prompt_str:
-            return '["SmartDoc dùng thuật toán gì?", "CoRAG là gì?"]'
-
-        # 2. Bắt ngữ cảnh của Prompt Self-RAG
-        if "confidence_score" in prompt_str:
-            return '{"confidence_score": 0.96, "suggested_questions": ["Tại sao cần Re-ranking?", "RAG khác gì CoRAG?"]}'
-
-        # 3. Trả về đối tượng mock giả lập AIMessage cho bước Generate chính
         class FakeAIMessage:
             def __init__(self, content):
                 self.content = content
 
+        # Bắt Prompt chia nhỏ câu hỏi
+        if "CHỈ TRẢ VỀ MẢNG JSON" in prompt_str:
+            return FakeAIMessage('["SmartDoc dùng thuật toán gì?", "CoRAG là gì?"]')
+
+        # Bắt Prompt đánh giá Self-RAG
+        if "confidence_score" in prompt_str:
+            return FakeAIMessage(
+                '{"confidence_score": 0.96, "suggested_questions": ["Tại sao cần Re-ranking?"]}'
+            )
+
+        # Bắt Prompt trả lời chính (Generation)
         return FakeAIMessage(
-            "SmartDoc dùng Cross-Encoder để Re-ranking. Khác với SmartDoc, CoRAG dùng thêm bộ nhớ Sliding Window cho hội thoại."
+            "SmartDoc dùng Cross-Encoder để Re-ranking. CoRAG có thêm Sliding Window."
         )
 
     mock_llm = RunnableLambda(mock_llm_invoke)
 
-    # --- MOCK DOCS (Giả lập tập tài liệu thô TV3 đưa qua, chứa thông tin rải rác) ---
-    mock_initial_docs = [
+    # --- 2.2 MOCK RETRIEVER (Chặn không cho gọi FAISS/BM25 thật) ---
+    mock_retriever = MagicMock()
+    # Giả lập kết quả trả về khi tìm kiếm
+    mock_retriever.invoke.return_value = [
         Document(
-            page_content="SmartDoc hỗ trợ thuật toán Re-ranking để tăng độ chính xác tìm kiếm.",
-            metadata={"source": "bao_cao.pdf", "page": 0, "score": 0.88},
-        ),
-        Document(
-            page_content="Hôm nay trời mưa khá to tại TP.HCM.",
-            metadata={"source": "thoi_tiet.pdf", "page": 5, "score": 0.45},
-        ),
-        Document(
-            page_content="CoRAG (Conversational RAG) là hệ thống có khả năng nhớ lịch sử nhờ Sliding Window.",
-            metadata={"source": "bao_cao.pdf", "page": 1, "score": 0.81},
-        ),
-        Document(
-            page_content="React là một thư viện Javascript phổ biến.",
-            metadata={"source": "IT_basic.pdf", "page": 2, "score": 0.30},
-        ),
+            page_content="SmartDoc hỗ trợ thuật toán Re-ranking.",
+            metadata={"source": "bao_cao.pdf", "page": 1},
+        )
     ]
+    # Ép hàm setup_hybrid_retriever trả về cái retriever giả này
+    mock_setup_retriever.return_value = mock_retriever
 
-    # --- CHẠY THỬ PIPELINE MULTI-HOP ---
-    # Câu hỏi phức tạp đòi hỏi phải chia làm 2 ý để truy xuất
+    # --- 2.3 CHẠY THỬ PIPELINE ---
+    mock_vector_store = MagicMock()  # FAISS giả
+    mock_docs = []  # Danh sách tài liệu gốc (không cần vì đã mock retriever)
     test_query = "Hệ thống SmartDoc dùng thuật toán gì và khác gì với hệ thống CoRAG?"
-    print(f"👉 Câu hỏi Test: {test_query}\n")
 
-    final_output = run_advanced_rag_pipeline(test_query, mock_initial_docs, mock_llm)
+    # Truyền đúng 4 tham số bắt buộc theo chữ ký của hàm (signature)
+    final_output = run_advanced_rag_pipeline(
+        user_question=test_query,
+        vector_store=mock_vector_store,
+        documents=mock_docs,
+        llm=mock_llm,
+    )
 
-    print("\n✅OUTPUT(TV5 gửi cho TV1):")
-    print(json.dumps(final_output, indent=4, ensure_ascii=False))
+    # --- 2.4 KHẲNG ĐỊNH KẾT QUẢ (ASSERTS) ---
+    # Phải có đủ các keys do hệ thống quy định
+    assert "answer" in final_output
+    assert "confidence_score" in final_output
+    assert "citations" in final_output
+    assert "suggested_questions" in final_output
 
-
-if __name__ == "__main__":
-    test_mock_advanced_rag()
+    # Kiểm tra tính chính xác của dữ liệu được nhào nặn qua Pipeline
+    assert "Sliding Window" in final_output["answer"]
+    assert final_output["confidence_score"] == 0.96
+    assert len(final_output["citations"]) > 0
+    assert final_output["citations"][0]["source"] == "bao_cao.pdf"

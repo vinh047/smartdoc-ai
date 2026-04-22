@@ -1,352 +1,410 @@
 """
 SmartDoc AI — Main Streamlit Application
 =========================================
-Advanced RAG pipeline với:
-  • Multi-document upload & single FAISS vector store
-  • Metadata filtering theo file (sidebar multiselect)
-  • Cross-Encoder reranking
-  • Persistent chat history (SQLite)
+Advanced RAG pipeline với: Multi-document upload, Metadata filtering, Cross-Encoder reranking, Persistent chat history.
 """
 
 import os
-import tempfile
-from typing import List
-
+import json
 import streamlit as st
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document as LangchainDocument
+from langchain_ollama import OllamaLLM
 
-# Import logic xử lý lõi
-from src.core.document_processor import process_document
+# Core Modules
+from src.core.document_processor import process_document_data
+from src.core.vector_manager import build_vector_store
 from src.core.rag_engine import run_rag_chain
-
-# Import các hàm tương tác Database
+from src.core.engines.advanced_rag import run_advanced_rag_pipeline
+from src.config import LLM_CONFIG
+from src.core.metadata_handler import MetadataManager
 from src.core.database import (
     init_db,
     create_new_session,
     get_all_sessions,
     add_message,
     get_messages_by_session,
+    clear_vector_store,
+    delete_session_permanently,
+    update_session_title,
 )
 
-# Import các component UI
-from src.ui import (
+# UI Components
+from src.ui.components import (
     render_sidebar,
     render_header,
-    render_file_uploader,
+    render_chat_message,
+    inject_custom_css,
 )
 
-from src.config import EMBEDDING_CONFIG
-
-# ─────────────────────────────────────────────
-#  Page config (must be FIRST Streamlit call)
-# ─────────────────────────────────────────────
+# =====================================================================
+# 1. KHỞI TẠO HỆ THỐNG & TRẠNG THÁI (STATE)
+# =====================================================================
 st.set_page_config(page_title="SmartDoc AI", page_icon="📄", layout="wide")
-
-# 1. Khởi tạo Database (Chỉ chạy 1 lần để tạo file .db nếu chưa có)
 init_db()
 
 
-# ─────────────────────────────────────────────
-#  Helpers
-# ─────────────────────────────────────────────
-@st.cache_resource(show_spinner="Đang tải mô hình Embedding…")
-def load_embedder() -> HuggingFaceEmbeddings:
-    """Khởi tạo embedder một lần duy nhất và cache lại."""
-    return HuggingFaceEmbeddings(
-        model_name=EMBEDDING_CONFIG["model_name"],
-        model_kwargs={"device": EMBEDDING_CONFIG["device"]},
-        encode_kwargs={"normalize_embeddings": EMBEDDING_CONFIG["normalize_embeddings"]},
+def init_app_state():
+    """Khởi tạo toàn bộ biến bộ nhớ của Streamlit."""
+    states = {
+        "vector_store": None,
+        "documents": None,
+        "messages": [],
+        "current_session_id": None,
+        "sessions_data": {},
+        "clicked_suggestion": None,
+        "processed_files": set(),
+    }
+    for key, val in states.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+
+init_app_state()
+inject_custom_css()
+
+
+def set_suggestion(q):
+    """Callback: Hứng câu hỏi khi người dùng bấm nút gợi ý."""
+    st.session_state.clicked_suggestion = q
+
+
+@st.dialog("⚠️ Xác nhận xóa phiên chat")
+def confirm_delete_session(session_id):
+    st.warning(
+        "Bạn có chắc chắn muốn xóa vĩnh viễn cuộc trò chuyện này không? Hành động này không thể hoàn tác."
     )
+    col1, col2 = st.columns(2)
+    if col1.button("✔️ Xác nhận Xóa", type="primary", use_container_width=True):
+        try:  # BẮT ĐẦU BỌC LỖI
+            delete_session_permanently(session_id)
+            if session_id in st.session_state.sessions_data:
+                del st.session_state.sessions_data[session_id]
+            if st.session_state.current_session_id == session_id:
+                init_app_state()
+            st.toast("Đã xóa phiên chat thành công!", icon="✅")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Lỗi khi xóa: {e}")
+    if col2.button("❌ Hủy bỏ", use_container_width=True):
+        st.rerun()
 
 
-# ─────────────────────────────────────────────
-#  2. Khởi tạo các State cần thiết
-# ─────────────────────────────────────────────
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "current_session_id" not in st.session_state:
-    st.session_state.current_session_id = None
-# NEW: lưu tên các file đã upload và lựa chọn lọc
-if "uploaded_filenames" not in st.session_state:
-    st.session_state.uploaded_filenames: List[str] = []
-if "selected_docs" not in st.session_state:
-    st.session_state.selected_docs: List[str] = []
+@st.dialog("⚠️ Xác nhận làm mới hệ thống")
+def confirm_clear_vector_store():
+    st.error(
+        "Hành động này sẽ xóa TOÀN BỘ tài liệu đã tải lên trong hệ thống. Bạn có chắc chắn không?"
+    )
+    col1, col2 = st.columns(2)
+    if col1.button("✔️ Chắc chắn Xóa", type="primary", use_container_width=True):
+        try:  # BẮT ĐẦU BỌC LỖI
+            clear_vector_store()
+            st.session_state.vector_store = None
+            st.session_state.documents = None
+            st.session_state.processed_files = set()
+            st.toast("Đã làm mới hệ thống tài liệu!", icon="✅")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Lỗi khi làm mới: {e}")
+    if col2.button("❌ Hủy bỏ", use_container_width=True):
+        st.rerun()
 
 
-# ─────────────────────────────────────────────
-#  3. Khu vực Sidebar
-# ─────────────────────────────────────────────
+# =====================================================================
+# 2. RENDER SIDEBAR (Điều hướng & Cấu hình)
+# =====================================================================
 with st.sidebar:
     render_sidebar()
-
     st.divider()
-    st.markdown("### 💬 Lịch sử trò chuyện")
 
-    # Nút tạo Phiên trò chuyện mới
+    st.markdown("### ⚙️ Cấu hình cắt chữ (Chunking)")
+    c_size = st.slider("Chunk Size", 500, 2000, 1000, 100, key="sz")
+    c_overlap = st.slider("Chunk Overlap", 50, 500, 100, 50, key="ov")
+    st.divider()
+
+    st.markdown("### 💬 Lịch sử trò chuyện")
     if st.button("➕ Cuộc trò chuyện mới", type="primary", use_container_width=True):
-        new_id = create_new_session("Phiên chat mới")
-        st.session_state.current_session_id = new_id
+        st.session_state.current_session_id = create_new_session("Phiên chat mới")
         st.session_state.messages = []
         st.rerun()
 
-    st.markdown("**Các phiên gần đây:**")
-    sessions = get_all_sessions()
-    for sess in sessions:
-        btn_label = f"📝 {sess['title']} ({sess['created_at'][:10]})"
-        if st.button(btn_label, key=sess["id"], use_container_width=True):
-            st.session_state.current_session_id = sess["id"]
-            st.session_state.messages = get_messages_by_session(sess["id"])
-            st.rerun()
+    for sess in get_all_sessions():
+        col_select, col_del = st.sidebar.columns([0.85, 0.15])
+        with col_select:
+            if st.button(
+                f"📝 {sess['title'][:15]}...",
+                key=f"sess_{sess['id']}",
+                use_container_width=True,
+            ):
+                st.session_state.current_session_id = sess["id"]
+                st.session_state.messages = get_messages_by_session(sess["id"])
+                sess_info = st.session_state.sessions_data.get(sess["id"], {})
+                st.session_state.vector_store = sess_info.get("vs", None)
+                st.session_state.documents = sess_info.get("docs", None)
+                st.session_state.processed_files = sess_info.get(
+                    "processed_files", set()
+                )
+                st.rerun()
+        with col_del:
+            if st.button("🗑️", key=f"del_{sess['id']}"):
+                confirm_delete_session(sess["id"])
 
     st.divider()
-    st.markdown("### 🛠️ Quản lý tài liệu")
-    if st.button("🔄 Xóa tài liệu (Upload lại)", use_container_width=True):
-        st.session_state.vector_store = None
-        st.session_state.uploaded_filenames = []
-        st.session_state.selected_docs = []
-        st.rerun()
 
-    # NEW: Document filtering multiselect — chỉ hiển thị khi đã có file
-    if st.session_state.uploaded_filenames:
-        st.divider()
-        st.markdown("### 🗂️ Lọc theo tài liệu")
-        selected = st.multiselect(
-            "Chọn file để tìm kiếm\n(bỏ trống = tất cả):",
-            options=st.session_state.uploaded_filenames,
-            default=st.session_state.selected_docs,
-        )
-        st.session_state.selected_docs = selected
+    if st.button("🔄 Xóa Vector DB (Upload lại)", use_container_width=True):
+        confirm_clear_vector_store()
 
-
-# ─────────────────────────────────────────────
-#  4. Render Header
-# ─────────────────────────────────────────────
+# =====================================================================
+# 3. MÀN HÌNH CHÍNH: QUẢN LÝ TÀI LIỆU (UPLOAD)
+# =====================================================================
 render_header()
+is_expanded = st.session_state.vector_store is None
+with st.expander("📂 Quản lý Tải lên & Bộ lọc tài liệu", expanded=is_expanded):
+    uploaded_files = st.file_uploader(
+        "Kéo thả tài liệu vào đây (PDF, DOCX)",
+        type=["pdf", "docx"],
+        accept_multiple_files=True,
+    )
+    current_file_names = (
+        set([f.name for f in uploaded_files]) if uploaded_files else set()
+    )
 
+    if uploaded_files and current_file_names != st.session_state.processed_files:
+        with st.spinner("Đang xử lý và cập nhật kho tài liệu..."):
+            try:
+                all_chunks, all_docs = [], []
+                meta_manager = MetadataManager()
 
-# ─────────────────────────────────────────────
-#  5. Khu vực Upload (multi-file)
-# ─────────────────────────────────────────────
-st.subheader("📁 Upload tài liệu")
-uploaded_files = st.file_uploader(
-    "Tải lên một hoặc nhiều file (PDF, DOCX)",
-    type=["pdf", "docx"],
-    accept_multiple_files=True,
+                for file in uploaded_files:
+                    temp_path = f"temp_{file.name}"
+                    with open(temp_path, "wb") as f:
+                        f.write(file.getbuffer())
+
+                    chunks, _ = process_document_data(temp_path, c_size, c_overlap)
+                    base_meta = meta_manager.create_metadata(file.name)
+                    for c in chunks:
+                        c["metadata"].update(base_meta)
+
+                    docs = [
+                        LangchainDocument(
+                            page_content=c["page_content"], metadata=c["metadata"]
+                        )
+                        for c in chunks
+                    ]
+                    all_chunks.extend(chunks)
+                    all_docs.extend(docs)
+                    os.remove(temp_path)
+
+                st.session_state.vector_store = build_vector_store(all_chunks)
+                st.session_state.documents = all_docs
+                st.session_state.processed_files = current_file_names
+
+                if st.session_state.current_session_id is None:
+                    st.session_state.current_session_id = create_new_session(
+                        "Phiên chat mới"
+                    )
+
+                st.session_state.sessions_data[st.session_state.current_session_id] = {
+                    "vs": st.session_state.vector_store,
+                    "docs": st.session_state.documents,
+                    "processed_files": st.session_state.processed_files,
+                }
+                st.success("Đã cập nhật hệ thống tài liệu!")
+                st.rerun()
+            except Exception as e:
+                # HIỂN THỊ LỖI UX/UI
+                st.error(f"🚨 Đã xảy ra lỗi khi đọc tài liệu: {str(e)}")
+                st.info(
+                    "💡 Gợi ý: Kiểm tra xem file PDF có bị hỏng hoặc bị khóa mật khẩu không."
+                )
+
+    search_filter = None
+    if st.session_state.vector_store is not None:
+        st.divider()
+        available_sources = list(
+            set(
+                [
+                    doc.metadata.get("source")
+                    for doc in st.session_state.documents
+                    if doc.metadata.get("source")
+                ]
+            )
+        )
+        selected_source = st.selectbox(
+            "🎯 Lọc tài liệu tìm kiếm:", ["Tất cả tài liệu"] + available_sources
+        )
+        search_filter = (
+            [selected_source] if selected_source != "Tất cả tài liệu" else None
+        )
+
+# =====================================================================
+# 4. MÀN HÌNH CHÍNH: KHU VỰC CHAT & SPLIT-SCREEN RAG
+# =====================================================================
+show_chat_area = (st.session_state.current_session_id is not None) or (
+    st.session_state.vector_store is not None
 )
 
-if uploaded_files and st.session_state.vector_store is None:
-    with st.spinner("Đang xử lý tài liệu (Splitting, Embedding & Indexing)…"):
-        embedder = load_embedder()
-        all_chunks = []
-        filenames: List[str] = []
-        errors: List[str] = []
-
-        progress_bar = st.progress(0, text="Đang chuẩn bị…")
-
-        for idx, uploaded_file in enumerate(uploaded_files):
-            filename = uploaded_file.name
-            suffix = os.path.splitext(filename)[1]
-
-            # Ghi ra file tạm để các loader có thể đọc từ đĩa
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(uploaded_file.getbuffer())
-                tmp_path = tmp.name
-
-            try:
-                # process_document trả về list[Document] đã gắn metadata
-                chunks = process_document(temp_path=tmp_path, filename=filename)
-                all_chunks.extend(chunks)
-                filenames.append(filename)
-            except ValueError as e:
-                errors.append(f"❌ '{filename}': {e}")
-            finally:
-                os.unlink(tmp_path)  # Dọn file tạm ngay sau khi dùng
-
-            progress_bar.progress(
-                (idx + 1) / len(uploaded_files),
-                text=f"Đã xử lý: {filename}",
-            )
-
-        progress_bar.empty()
-
-        for err in errors:
-            st.error(err)
-
-        if all_chunks:
-            # Tạo MỘT FAISS vector store duy nhất từ tất cả chunks
-            st.session_state.vector_store = FAISS.from_documents(all_chunks, embedder)
-            st.session_state.uploaded_filenames = filenames
-            st.session_state.selected_docs = []  # Reset filter
-
-            # Tự tạo phiên chat mới nếu chưa có
-            if st.session_state.current_session_id is None:
-                title = "Phiên: " + ", ".join(filenames[:2]) + (
-                    "…" if len(filenames) > 2 else ""
-                )
-                st.session_state.current_session_id = create_new_session(title)
-                st.session_state.messages = []
-
-            st.success(
-                f"✅ Đã tạo {len(all_chunks)} đoạn văn bản từ "
-                f"{len(filenames)} tài liệu. Hãy đặt câu hỏi bên dưới!"
-            )
-            st.rerun()
-
-
-# ─────────────────────────────────────────────
-#  6. Khu vực Hỏi Đáp (Giao diện Chatbot)
-# ─────────────────────────────────────────────
-if st.session_state.vector_store is not None:
-    st.divider()
-    st.subheader("💬 Trò chuyện với tài liệu")
-
-    # Hiển thị badge các file đã upload
-    if st.session_state.uploaded_filenames:
-        badge_html = " ".join(
-            f'<span style="background:#1e3a5f;color:#fff;padding:2px 10px;'
-            f'border-radius:12px;font-size:0.78rem;margin-right:4px;">📄 {f}</span>'
-            for f in st.session_state.uploaded_filenames
-        )
-        st.markdown(badge_html, unsafe_allow_html=True)
-        filter_label = (
-            ", ".join(st.session_state.selected_docs)
-            if st.session_state.selected_docs
-            else "tất cả tài liệu"
-        )
-        st.caption(f"🔍 Đang tìm kiếm trong: **{filter_label}**")
+if show_chat_area:
+    st.subheader("💬 Trò chuyện với tài liệu (Split-Screen Comparison)")
 
     if st.session_state.current_session_id is None:
         st.session_state.current_session_id = create_new_session("Phiên chat mới")
 
-    # 6.1 Hiển thị lại toàn bộ lịch sử chat
+    # 4.1. Luôn luôn hiển thị lịch sử trò chuyện (Dù RAM đã bị xóa file)
     for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            st.markdown(
-                f"""
-                <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">
-                    <div style="background-color:#007BFF;color:white;padding:10px 16px;
-                                border-radius:20px 20px 4px 20px;max-width:75%;
-                                line-height:1.5;box-shadow:0 1px 2px rgba(0,0,0,0.1);">
-                        {msg['content']}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+        render_chat_message(msg)
+
+    # 4.2. Hứng luồng câu hỏi mới (Chỉ hiện ô nhập nếu có Vector Store)
+    user_question = None
+    if st.session_state.vector_store is not None:
+        user_question = st.chat_input("Nhập câu hỏi của bạn về nội dung tài liệu...")
+        if st.session_state.clicked_suggestion:
+            user_question = st.session_state.clicked_suggestion
+            st.session_state.clicked_suggestion = None
+
+    # 4.3. Phân luồng UI: Báo thiếu file HOẶC chạy AI
+    if st.session_state.vector_store is None:
+        if len(st.session_state.messages) > 0:
+            st.warning(
+                "⚠️ Phiên trò chuyện này thuộc về lần truy cập trước. Để tối ưu bộ nhớ hệ thống, tài liệu tạm đã được giải phóng. Vui lòng **tải lên lại tài liệu cũ** ở khung phía trên để tiếp tục hỏi đáp."
             )
         else:
-            with st.chat_message("assistant"):
-                st.markdown(msg["content"])
+            st.info(
+                "👈 Vui lòng tải lên tài liệu ở khung phía trên để bắt đầu trò chuyện."
+            )
 
-    # Ô nhập liệu dạng chat
-    user_question = st.chat_input("Nhập câu hỏi của bạn về nội dung tài liệu…")
+    elif user_question:
 
-    if user_question:
-        # 6.2 Lưu câu hỏi của User vào STATE và DB
+        # [TÍNH NĂNG MỚI] Tự động đổi tên phiên chat nếu đây là câu hỏi đầu tiên
+        if len(st.session_state.messages) == 0:
+            short_title = (
+                user_question[:25] + "..." if len(user_question) > 25 else user_question
+            )
+            update_session_title(st.session_state.current_session_id, short_title)
+
         st.session_state.messages.append({"role": "user", "content": user_question})
         add_message(st.session_state.current_session_id, "user", user_question)
 
-        st.markdown(
-            f"""
-            <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;">
-                <div style="background-color:#007BFF;color:white;padding:10px 16px;
-                            border-radius:20px 20px 4px 20px;max-width:75%;
-                            line-height:1.5;box-shadow:0 1px 2px rgba(0,0,0,0.1);">
-                    {user_question}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        with st.chat_message("user"):
+            st.markdown(user_question)
 
-        # 6.3 Xây dựng chuỗi lịch sử hội thoại cho prompt
-        recent_messages = (
-            st.session_state.messages[-5:-1]
+        recent_msgs = (
+            st.session_state.messages[-4:-1]
             if len(st.session_state.messages) > 1
             else []
         )
-        chat_history_str = ""
-        for msg in recent_messages:
-            role_name = "Người dùng" if msg["role"] == "user" else "AI"
-            chat_history_str += f"{role_name}: {msg['content']}\n"
+        history_str = "\n".join([f"{m['role']}: {m['content']}" for m in recent_msgs])
 
-        # 6.4 Xử lý và hiển thị câu trả lời của AI
-        with st.chat_message("assistant"):
-            response_placeholder = st.empty()
-            full_response = ""
-            reranked_docs = []
-            unique_sources = []
+        col1, col2 = st.columns(2)
+        std_answer = "Lỗi sinh câu trả lời"
+        source_docs = []
+        adv_data = {}
 
-            try:
-                # NEW: unpack 3 biến từ run_rag_chain đã cập nhật
-                response_stream, reranked_docs, unique_sources = run_rag_chain(
-                    user_question,
-                    st.session_state.vector_store,
-                    chat_history_str,
-                )
-
-                # Stream từng token ra màn hình
-                for token in response_stream:
-                    full_response += token
-                    response_placeholder.markdown(full_response + "▌")
-
-                # NEW: Gắn danh sách nguồn vào cuối câu trả lời
-                if unique_sources:
-                    source_text = ", ".join(unique_sources)
-                    full_response += f"\n\n**Nguồn:** [{source_text}]"
-
-                response_placeholder.markdown(full_response)
-
-            except Exception as e:
-                full_response = f"❌ Đã xảy ra lỗi khi xử lý câu hỏi: {e}"
-                response_placeholder.error(full_response)
-
-            # NEW: Expander chi tiết trích dẫn từ reranked_docs
-            if reranked_docs:
-                with st.expander("📚 Xem nguồn trích dẫn (đã rerank)"):
-                    for i, doc in enumerate(reranked_docs):
-                        page_num = doc.metadata.get("page", 0) + 1
-                        file_name = os.path.basename(
-                            doc.metadata.get("source", "Tài liệu")
+        # ---> CỘT 1: Standard RAG (TV3)
+        with col1:
+            st.markdown("### 🟢 Standard RAG (TV3)")
+            with st.chat_message("assistant"):
+                with st.spinner("Đang truy xuất (Hybrid)..."):
+                    try:
+                        res_stream, source_docs = run_rag_chain(
+                            user_question,
+                            st.session_state.vector_store,
+                            st.session_state.documents,
+                            "",
+                            search_filter,
                         )
-                        rerank_score = doc.metadata.get("rerank_score", None)
+                        std_answer = st.write_stream(res_stream)
 
-                        score_badge = (
-                            f" · `score: {rerank_score:.4f}`"
-                            if rerank_score is not None
-                            else ""
+                        if source_docs:
+                            with st.popover("📚 Click xem Context gốc"):
+                                for i, doc in enumerate(source_docs):
+                                    st.markdown(
+                                        f"**📍 Nguồn {i+1} | Trang {doc.metadata.get('page', 0)}**"
+                                    )
+                                    highlighted_text = f"""<div style="background-color: rgba(255, 212, 59, 0.15); border-left: 4px solid #ffd43b; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 0.9em;">{doc.page_content}</div>"""
+                                    st.markdown(
+                                        highlighted_text, unsafe_allow_html=True
+                                    )
+                    except Exception as e:
+                        st.error(f"🔌 Lỗi kết nối AI (TV3): {e}")
+                        std_answer = "Xin lỗi, Standard RAG đang gặp sự cố."
+
+        # ---> CỘT 2: Advanced CoRAG (TV5)
+        with col2:
+            st.markdown("### 🚀 Advanced CoRAG (TV5)")
+            with st.chat_message("assistant"):
+                with st.spinner("Đang chạy Cross-Encoder & Self-RAG..."):
+                    try:
+                        llm_adv = OllamaLLM(model=LLM_CONFIG["model"], temperature=0.0)
+                        adv_data = run_advanced_rag_pipeline(
+                            user_question,
+                            st.session_state.vector_store,
+                            st.session_state.documents,
+                            llm_adv,
+                            history_str,
+                            search_filter,
                         )
 
-                        st.markdown(
-                            f"**Nguồn {i + 1} — `{file_name}` · Trang {page_num}**"
-                            f"{score_badge}"
+                        st.markdown(adv_data.get("answer", "Lỗi sinh câu trả lời"))
+                        st.divider()
+                        st.metric(
+                            "Độ tự tin (Self-RAG Score)",
+                            f"{adv_data.get('confidence_score', 0)*100:.0f}%",
                         )
-                        st.caption(f"_{doc.page_content[:200]}…_")
-                        if i < len(reranked_docs) - 1:
-                            st.markdown("---")
 
-        # 6.5 Lưu câu trả lời của AI vào STATE và DB
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
-        add_message(st.session_state.current_session_id, "assistant", full_response)
+                        if adv_data.get("citations"):
+                            with st.popover("🎯 Nguồn đã tinh chỉnh (Cross-Encoder)"):
+                                for i, cite in enumerate(adv_data.get("citations")):
+                                    score_badge = f"<span style='background:#ff4b4b; color:white; padding:2px 6px; border-radius:10px; font-size:0.8em;'>Điểm: {cite.get('rerank_score', 0):.2f}</span>"
+                                    st.markdown(
+                                        f"**📍 Nguồn {i+1} | Trang {cite.get('page', 'N/A')}** {score_badge}",
+                                        unsafe_allow_html=True,
+                                    )
+                                    highlighted_text = f"""<div style="background-color: rgba(255, 75, 75, 0.1); border-left: 4px solid #ff4b4b; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 0.9em;">{cite.get('content', '')}</div>"""
+                                    st.markdown(
+                                        highlighted_text, unsafe_allow_html=True
+                                    )
 
-        st.rerun()
+                        if adv_data.get("suggested_questions"):
+                            st.markdown("**💡 Gợi ý câu hỏi:**")
+                            for idx, sq in enumerate(
+                                adv_data.get("suggested_questions")
+                            ):
+                                st.button(
+                                    sq,
+                                    key=f"btn_sugg_{len(st.session_state.messages)}_{idx}",
+                                    on_click=set_suggestion,
+                                    args=(sq,),
+                                )
+                    except ConnectionError:
+                        st.error(
+                            "🔌 Không thể kết nối với Ollama. Vui lòng bật phần mềm Ollama ở Taskbar."
+                        )
+                    except Exception as e:
+                        st.error(f"⚠️ Lỗi hệ thống Advanced CoRAG: {e}")
 
-else:
-    # Chưa upload tài liệu — hướng dẫn nhanh
-    st.info("👆 Hãy upload ít nhất một tài liệu PDF hoặc DOCX để bắt đầu trò chuyện.")
+        # 4.4. Đóng gói dữ liệu và Lưu Database
+        try:
+            rag_citations = [
+                {"page": d.metadata.get("page", 0), "content": d.page_content}
+                for d in (source_docs or [])
+            ]
+            split_data = {
+                "is_split": True,
+                "rag_answer": std_answer,
+                "rag_citations": rag_citations,
+                "corag_answer": adv_data.get("answer", "Lỗi sinh câu trả lời"),
+                "corag_confidence": adv_data.get("confidence_score", 0),
+                "corag_suggestions": adv_data.get("suggested_questions", []),
+                "citations": adv_data.get("citations", []),
+            }
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(
-            "### 📂 Multi-Document\nUpload nhiều file cùng lúc và hỏi đáp trên toàn bộ."
-        )
-    with col2:
-        st.markdown(
-            "### 🔍 Metadata Filtering\nLọc kết quả theo từng file cụ thể trong sidebar."
-        )
-    with col3:
-        st.markdown(
-            "### 🏆 Cross-Encoder Reranking\nKết quả được sắp xếp lại bằng AI để chính xác hơn."
-        )
+            final_answer_json = json.dumps(split_data, ensure_ascii=False)
+            st.session_state.messages.append(
+                {"role": "assistant", "content": final_answer_json}
+            )
+            add_message(
+                st.session_state.current_session_id, "assistant", final_answer_json
+            )
+        except Exception as e:
+            st.toast("⚠️ Đã xảy ra lỗi khi lưu lịch sử vào Database", icon="⚠️")
+            print(f"Lỗi lưu DB: {e}")

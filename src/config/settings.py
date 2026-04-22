@@ -9,7 +9,7 @@ TEXT_SPLITTER_CONFIG = {
 # 2. Cấu hình mô hình nhúng (Embedding Model)
 EMBEDDING_CONFIG = {
     "model_name": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", # Hỗ trợ tiếng Việt
-    "device": "cpu",          # Đổi thành 'cuda' nếu cậu dùng GPU có CUDA
+    "device": "cuda",          # Đổi thành 'cuda' nếu cậu dùng GPU có CUDA
     "normalize_embeddings": True
 }
 
@@ -21,7 +21,7 @@ RETRIEVER_CONFIG = {
 
 # 4. Cấu hình mô hình ngôn ngữ lớn (LLM)
 LLM_CONFIG = {
-    "model": "llama3.2",       # Mô hình Qwen
+    "model": "qwen2.5:7b",       # Mô hình Qwen
     "temperature": 0.7,          # Độ sáng tạo
     "top_p": 0.9,                # Lấy mẫu Nucleus
     "repeat_penalty": 1.1        # Tránh lặp từ

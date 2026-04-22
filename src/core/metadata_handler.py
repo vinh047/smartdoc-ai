@@ -5,18 +5,24 @@ from langchain_core.documents import Document
 
 
 class MetadataManager:
-    """Quản lý metadata cho các tài liệu được upload."""
+    """
+    Quản lý và đồng bộ metadata cho các tài liệu được tải lên hệ thống.
+    Hỗ trợ việc phân loại, lọc và truy xuất nguồn gốc tài liệu trong Vector Database.
+    """
 
-    def create_metadata(self, filename: str, doc_type: str = "document") -> Dict[str, Any]:
+    def create_metadata(
+        self, filename: str, doc_type: str = "document"
+    ) -> Dict[str, Any]:
         """
-        Tạo một dictionary metadata chuẩn cho tài liệu.
+        Tạo một bộ metadata chuẩn cho tài liệu mới.
 
         Args:
-            filename: Tên file gốc của tài liệu.
-            doc_type: Loại tài liệu (mặc định: 'document').
+            filename (str): Tên file gốc của tài liệu (VD: 'baocao.pdf').
+            doc_type (str, optional): Phân loại tài liệu. Mặc định là 'document'.
 
         Returns:
-            Dict chứa source, upload_date, doc_type, và doc_id.
+            Dict[str, Any]: Chứa thông tin về nguồn (source), ngày tải lên (upload_date),
+                            loại (doc_type) và mã định danh duy nhất (doc_id).
         """
         return {
             "source": filename,
@@ -29,16 +35,15 @@ class MetadataManager:
         self, documents: List[Document], metadata: Dict[str, Any]
     ) -> List[Document]:
         """
-        Gắn metadata vào từng Document object trong danh sách.
-        Giữ lại metadata gốc từ loader (ví dụ: page number) và ghi đè/thêm
-        các trường từ metadata mới.
+        Gắn hoặc ghi đè metadata vào danh sách các đoạn văn bản (chunks).
+        Lưu ý: Các metadata có sẵn từ bộ đọc (như page number) vẫn sẽ được giữ nguyên.
 
         Args:
-            documents: Danh sách LangChain Document objects.
-            metadata: Dictionary metadata cần gắn vào.
+            documents (List[Document]): Danh sách các object Document của LangChain.
+            metadata (Dict[str, Any]): Bộ metadata chuẩn cần gắn vào.
 
         Returns:
-            Danh sách Document đã được cập nhật metadata.
+            List[Document]: Danh sách tài liệu đã được cập nhật metadata.
         """
         for doc in documents:
             doc.metadata.update(metadata)
