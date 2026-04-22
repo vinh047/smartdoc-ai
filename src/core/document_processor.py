@@ -1,41 +1,106 @@
 import os
-from langchain_community.document_loaders import PDFPlumberLoader, Docx2txtLoader
+import fitz  # PyMuPDF
+from docx import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from concurrent.futures import ThreadPoolExecutor
 
-from src.config import TEXT_SPLITTER_CONFIG, EMBEDDING_CONFIG
+from src.config import TEXT_SPLITTER_CONFIG
 
-def process_document(temp_path):
-    # Trích xuất đuôi file
-    file_extension = os.path.splitext(temp_path)[1].lower()
-    
-    # Chọn Loader phù hợp
-    if file_extension == '.pdf':
-        loader = PDFPlumberLoader(temp_path)
-    elif file_extension == '.docx':
-        loader = Docx2txtLoader(temp_path)
+# Import các logic đã được tách riêng
+from src.core.ocr_utils import (
+    clean_ocr_text,
+    is_text_good_enough,
+    extract_text_with_ocr,
+)
+from src.core.vector_manager import build_vector_store
+
+
+def process_document_data(temp_path: str, chunk_size=None, chunk_overlap=None):
+    """Hàm định tuyến xử lý tùy theo đuôi file (PDF hoặc DOCX)"""
+    if not os.path.exists(temp_path):
+        raise FileNotFoundError(f"Không tìm thấy file: {temp_path}")
+
+    c_size = chunk_size or TEXT_SPLITTER_CONFIG["chunk_size"]
+    c_overlap = chunk_overlap or TEXT_SPLITTER_CONFIG["chunk_overlap"]
+
+    file_ext = os.path.splitext(temp_path)[1].lower()
+    if file_ext == ".pdf":
+        return process_pdf(temp_path, c_size, c_overlap)
+    elif file_ext == ".docx":
+        return process_docx(temp_path, c_size, c_overlap)
     else:
         raise ValueError("Chỉ hỗ trợ file PDF và DOCX")
+
+
+def process_pdf(file_path: str, chunk_size: int, chunk_overlap: int):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    source_name = os.path.basename(file_path)
     
-    # Đọc tài liệu
-    docs = loader.load()
+    with fitz.open(file_path) as doc:
+        pages = list(doc)
+        
+        # Hàm xử lý cho từng trang riêng biệt
+        def process_single_page(page):
+            page_number = page.number + 1
+            raw_text = page.get_text("text")
+            text = clean_ocr_text(raw_text)
 
-    # Chia nhỏ văn bản
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=TEXT_SPLITTER_CONFIG["chunk_size"],
-        chunk_overlap=TEXT_SPLITTER_CONFIG["chunk_overlap"]  
+            if not is_text_good_enough(text):
+                ocr_text = extract_text_with_ocr(page)
+                if len(ocr_text) > 0:
+                    text = ocr_text
+            
+            page_chunks = []
+            if text:
+                chunks = splitter.split_text(text)
+                for chunk in chunks:
+                    page_chunks.append({
+                        "page_content": chunk,
+                        "metadata": {"source": source_name, "page": page_number, "type": "text"}
+                    })
+            return page_chunks
+
+        # Sử dụng ThreadPool để xử lý song song các trang
+        all_chunks = []
+        # max_workers tùy thuộc vào CPU của cậu (thường là 4 hoặc 8)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(executor.map(process_single_page, pages))
+            
+        for page_result in results:
+            all_chunks.extend(page_result)
+
+    # Đánh lại chunk_id sau khi gom đủ
+    for i, chunk in enumerate(all_chunks):
+        chunk["metadata"]["chunk_id"] = f"c{i+1:03}"
+
+    return all_chunks, []
+
+
+def process_docx(file_path: str, chunk_size: int, chunk_overlap: int):
+    """Đọc và băm nhỏ file Word DOCX"""
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
-    documents = text_splitter.split_documents(docs)
+    doc = Document(file_path)
 
-    # Khởi tạo mô hình Embedding
-    embedder = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_CONFIG["model_name"],
-        model_kwargs={'device': EMBEDDING_CONFIG["device"]},
-        encode_kwargs={'normalize_embeddings': EMBEDDING_CONFIG["normalize_embeddings"]}
-    )
+    full_text = "\n".join(
+        para.text for para in doc.paragraphs if para.text.strip()
+    ).strip()
+    all_chunks = []
 
-    # Lưu vào FAISS Vector Store
-    vector_store = FAISS.from_documents(documents, embedder)
-    
-    return vector_store
+    if full_text:
+        text_chunks = splitter.split_text(full_text)
+        for idx, chunk in enumerate(text_chunks, start=1):
+            all_chunks.append(
+                {
+                    "page_content": chunk,
+                    "metadata": {
+                        "source": os.path.basename(file_path),
+                        "page": 1,
+                        "chunk_id": f"c{idx:03}",
+                        "type": "text",
+                    },
+                }
+            )
+
+    return all_chunks, []

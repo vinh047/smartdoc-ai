@@ -9,7 +9,7 @@ TEXT_SPLITTER_CONFIG = {
 # 2. Cấu hình mô hình nhúng (Embedding Model)
 EMBEDDING_CONFIG = {
     "model_name": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", # Hỗ trợ tiếng Việt
-    "device": "cpu",          # Đổi thành 'cuda' nếu cậu dùng GPU có CUDA
+    "device": "cuda",          # Đổi thành 'cuda' nếu cậu dùng GPU có CUDA
     "normalize_embeddings": True
 }
 
