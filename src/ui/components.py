@@ -4,7 +4,7 @@ from typing import Dict, Any
 
 
 def inject_custom_css():
-    """Bơm CSS tùy chỉnh để cố định khung Upload không bị trôi khi cuộn trang."""
+    """Bơm CSS tùy chỉnh thích nghi với cả Light và Dark mode."""
     st.markdown(
         """
         <style>
@@ -14,10 +14,11 @@ def inject_custom_css():
             z-index: 999;
         }
         section[data-testid="stMain"] [data-testid="stExpander"]:first-of-type details {
-            background-color: rgb(14, 17, 23); 
+            /* Dùng màu nền mờ để thích nghi mọi giao diện */
+            background-color: rgba(128, 128, 128, 0.1); 
             padding: 5px;
             border-radius: 8px;
-            border: 1px solid rgba(250, 250, 250, 0.2);
+            border: 1px solid rgba(128, 128, 128, 0.2);
         }
         </style>
     """,
