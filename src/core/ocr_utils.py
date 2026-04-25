@@ -4,7 +4,7 @@ import tempfile
 import easyocr
 
 # Khởi tạo mô hình EasyOCR 1 lần duy nhất khi file được import
-reader = easyocr.Reader(["vi", "en"], gpu=True)
+reader = easyocr.Reader(["vi", "en"], gpu=False)
 
 
 def clean_ocr_text(text: str) -> str:
