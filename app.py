@@ -1,9 +1,3 @@
-"""
-SmartDoc AI — Main Streamlit Application
-=========================================
-Advanced RAG pipeline với: Multi-document upload, Metadata filtering, Cross-Encoder reranking, Persistent chat history.
-"""
-
 import os
 import json
 import streamlit as st
@@ -14,7 +8,12 @@ from langchain_ollama import OllamaLLM
 from src.core.document_processor import process_document_data
 from src.core.vector_manager import build_vector_store
 from src.core.rag_engine import run_rag_chain
-from src.core.engines.advanced_rag import run_advanced_rag_pipeline
+
+# LƯU Ý: Import thêm evaluate_with_self_rag vào đây
+from src.core.engines.advanced_rag import (
+    run_advanced_rag_pipeline,
+    evaluate_with_self_rag,
+)
 from src.config import LLM_CONFIG
 from src.core.metadata_handler import MetadataManager
 from src.core.database import (
@@ -36,15 +35,11 @@ from src.ui.components import (
     inject_custom_css,
 )
 
-# =====================================================================
-# 1. KHỞI TẠO HỆ THỐNG & TRẠNG THÁI (STATE)
-# =====================================================================
 st.set_page_config(page_title="SmartDoc AI", page_icon="📄", layout="wide")
 init_db()
 
 
 def init_app_state():
-    """Khởi tạo toàn bộ biến bộ nhớ của Streamlit."""
     states = {
         "vector_store": None,
         "documents": None,
@@ -64,7 +59,6 @@ inject_custom_css()
 
 
 def set_suggestion(q):
-    """Callback: Hứng câu hỏi khi người dùng bấm nút gợi ý."""
     st.session_state.clicked_suggestion = q
 
 
@@ -75,7 +69,7 @@ def confirm_delete_session(session_id):
     )
     col1, col2 = st.columns(2)
     if col1.button("✔️ Xác nhận Xóa", type="primary", use_container_width=True):
-        try:  # BẮT ĐẦU BỌC LỖI
+        try:
             delete_session_permanently(session_id)
             if session_id in st.session_state.sessions_data:
                 del st.session_state.sessions_data[session_id]
@@ -96,7 +90,7 @@ def confirm_clear_vector_store():
     )
     col1, col2 = st.columns(2)
     if col1.button("✔️ Chắc chắn Xóa", type="primary", use_container_width=True):
-        try:  # BẮT ĐẦU BỌC LỖI
+        try:
             clear_vector_store()
             st.session_state.vector_store = None
             st.session_state.documents = None
@@ -109,9 +103,6 @@ def confirm_clear_vector_store():
         st.rerun()
 
 
-# =====================================================================
-# 2. RENDER SIDEBAR (Điều hướng & Cấu hình)
-# =====================================================================
 with st.sidebar:
     render_sidebar()
     st.divider()
@@ -147,15 +138,10 @@ with st.sidebar:
         with col_del:
             if st.button("🗑️", key=f"del_{sess['id']}"):
                 confirm_delete_session(sess["id"])
-
     st.divider()
-
     if st.button("🔄 Xóa Vector DB (Upload lại)", use_container_width=True):
         confirm_clear_vector_store()
 
-# =====================================================================
-# 3. MÀN HÌNH CHÍNH: QUẢN LÝ TÀI LIỆU (UPLOAD)
-# =====================================================================
 render_header()
 is_expanded = st.session_state.vector_store is None
 with st.expander("📂 Quản lý Tải lên & Bộ lọc tài liệu", expanded=is_expanded):
@@ -211,7 +197,6 @@ with st.expander("📂 Quản lý Tải lên & Bộ lọc tài liệu", expanded
                 st.success("Đã cập nhật hệ thống tài liệu!")
                 st.rerun()
             except Exception as e:
-                # HIỂN THỊ LỖI UX/UI
                 st.error(f"🚨 Đã xảy ra lỗi khi đọc tài liệu: {str(e)}")
                 st.info(
                     "💡 Gợi ý: Kiểm tra xem file PDF có bị hỏng hoặc bị khóa mật khẩu không."
@@ -236,9 +221,6 @@ with st.expander("📂 Quản lý Tải lên & Bộ lọc tài liệu", expanded
             [selected_source] if selected_source != "Tất cả tài liệu" else None
         )
 
-# =====================================================================
-# 4. MÀN HÌNH CHÍNH: KHU VỰC CHAT & SPLIT-SCREEN RAG
-# =====================================================================
 show_chat_area = (st.session_state.current_session_id is not None) or (
     st.session_state.vector_store is not None
 )
@@ -249,11 +231,9 @@ if show_chat_area:
     if st.session_state.current_session_id is None:
         st.session_state.current_session_id = create_new_session("Phiên chat mới")
 
-    # 4.1. Luôn luôn hiển thị lịch sử trò chuyện (Dù RAM đã bị xóa file)
     for msg in st.session_state.messages:
         render_chat_message(msg)
 
-    # 4.2. Hứng luồng câu hỏi mới (Chỉ hiện ô nhập nếu có Vector Store)
     user_question = None
     if st.session_state.vector_store is not None:
         user_question = st.chat_input("Nhập câu hỏi của bạn về nội dung tài liệu...")
@@ -261,11 +241,10 @@ if show_chat_area:
             user_question = st.session_state.clicked_suggestion
             st.session_state.clicked_suggestion = None
 
-    # 4.3. Phân luồng UI: Báo thiếu file HOẶC chạy AI
     if st.session_state.vector_store is None:
         if len(st.session_state.messages) > 0:
             st.warning(
-                "⚠️ Phiên trò chuyện này thuộc về lần truy cập trước. Để tối ưu bộ nhớ hệ thống, tài liệu tạm đã được giải phóng. Vui lòng **tải lên lại tài liệu cũ** ở khung phía trên để tiếp tục hỏi đáp."
+                "⚠️ Phiên trò chuyện này thuộc về lần truy cập trước. Vui lòng **tải lên lại tài liệu cũ** ở khung phía trên để tiếp tục hỏi đáp."
             )
         else:
             st.info(
@@ -273,8 +252,6 @@ if show_chat_area:
             )
 
     elif user_question:
-
-        # [TÍNH NĂNG MỚI] Tự động đổi tên phiên chat nếu đây là câu hỏi đầu tiên
         if len(st.session_state.messages) == 0:
             short_title = (
                 user_question[:25] + "..." if len(user_question) > 25 else user_question
@@ -318,7 +295,7 @@ if show_chat_area:
                             with st.popover("📚 Click xem Context gốc"):
                                 for i, doc in enumerate(source_docs):
                                     st.markdown(
-                                        f"**📍 Nguồn {i+1} | Trang {doc.metadata.get('page', 0)}**"
+                                        f"**📍 Nguồn {i + 1} | Trang {doc.metadata.get('page', 0)}**"
                                     )
                                     highlighted_text = f"""<div style="background-color: rgba(255, 212, 59, 0.15); border-left: 4px solid #ffd43b; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 0.9em;">{doc.page_content}</div>"""
                                     st.markdown(
@@ -328,59 +305,90 @@ if show_chat_area:
                         st.error(f"🔌 Lỗi kết nối AI (TV3): {e}")
                         std_answer = "Xin lỗi, Standard RAG đang gặp sự cố."
 
-        # ---> CỘT 2: Advanced CoRAG (TV5)
+        # ---> CỘT 2: Advanced CoRAG (TV5) ĐÃ FIX STREAMING
         with col2:
             st.markdown("### 🚀 Advanced CoRAG (TV5)")
             with st.chat_message("assistant"):
-                with st.spinner("Đang chạy Cross-Encoder & Self-RAG..."):
-                    try:
-                        llm_adv = OllamaLLM(model=LLM_CONFIG["model"], temperature=0.0)
-                        adv_data = run_advanced_rag_pipeline(
+                # Bỏ st.spinner bao quanh toàn bộ để không cản trở stream
+                status_placeholder = st.empty()
+                status_placeholder.markdown(
+                    "⏳ *Đang phân tích & truy xuất Cross-Encoder...*"
+                )
+
+                try:
+                    llm_adv = OllamaLLM(model=LLM_CONFIG["model"], temperature=0.0)
+
+                    # 1. Chạy RAG lấy stream và context
+                    pipeline_result = run_advanced_rag_pipeline(
+                        user_question,
+                        st.session_state.vector_store,
+                        st.session_state.documents,
+                        llm_adv,
+                        history_str,
+                        search_filter,
+                    )
+
+                    # Xóa chữ "Đang phân tích" trước khi bắt đầu nhả chữ
+                    status_placeholder.empty()
+
+                    # 2. STREAMING LÊN GIAO DIỆN CHÍNH
+                    corag_answer = st.write_stream(pipeline_result["answer_stream"])
+
+                    # 3. CHẠY SELF-RAG NGẦM SAU KHI STREAM XONG
+                    with st.spinner("Đang đánh giá Self-RAG..."):
+                        self_rag_result = evaluate_with_self_rag(
                             user_question,
-                            st.session_state.vector_store,
-                            st.session_state.documents,
+                            pipeline_result["context_text"],
+                            corag_answer,
                             llm_adv,
-                            history_str,
-                            search_filter,
                         )
 
-                        st.markdown(adv_data.get("answer", "Lỗi sinh câu trả lời"))
-                        st.divider()
-                        st.metric(
-                            "Độ tự tin (Self-RAG Score)",
-                            f"{adv_data.get('confidence_score', 0)*100:.0f}%",
-                        )
+                    # Lưu lại thông tin vào adv_data để ghi DB
+                    adv_data = {
+                        "answer": corag_answer,
+                        "confidence_score": self_rag_result.get(
+                            "confidence_score", 0.0
+                        ),
+                        "suggested_questions": self_rag_result.get(
+                            "suggested_questions", []
+                        ),
+                        "citations": pipeline_result["citations"],
+                    }
 
-                        if adv_data.get("citations"):
-                            with st.popover("🎯 Nguồn đã tinh chỉnh (Cross-Encoder)"):
-                                for i, cite in enumerate(adv_data.get("citations")):
-                                    score_badge = f"<span style='background:#ff4b4b; color:white; padding:2px 6px; border-radius:10px; font-size:0.8em;'>Điểm: {cite.get('rerank_score', 0):.2f}</span>"
-                                    st.markdown(
-                                        f"**📍 Nguồn {i+1} | Trang {cite.get('page', 'N/A')}** {score_badge}",
-                                        unsafe_allow_html=True,
-                                    )
-                                    highlighted_text = f"""<div style="background-color: rgba(255, 75, 75, 0.1); border-left: 4px solid #ff4b4b; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 0.9em;">{cite.get('content', '')}</div>"""
-                                    st.markdown(
-                                        highlighted_text, unsafe_allow_html=True
-                                    )
+                    # Hiển thị UI phần Self-RAG & Citations
+                    st.divider()
+                    st.metric(
+                        "Độ tự tin (Self-RAG Score)",
+                        f"{adv_data['confidence_score'] * 100:.0f}%",
+                    )
 
-                        if adv_data.get("suggested_questions"):
-                            st.markdown("**💡 Gợi ý câu hỏi:**")
-                            for idx, sq in enumerate(
-                                adv_data.get("suggested_questions")
-                            ):
-                                st.button(
-                                    sq,
-                                    key=f"btn_sugg_{len(st.session_state.messages)}_{idx}",
-                                    on_click=set_suggestion,
-                                    args=(sq,),
+                    if adv_data.get("citations"):
+                        with st.popover("🎯 Nguồn đã tinh chỉnh (Cross-Encoder)"):
+                            for i, cite in enumerate(adv_data["citations"]):
+                                score_badge = f"<span style='background:#ff4b4b; color:white; padding:2px 6px; border-radius:10px; font-size:0.8em;'>Điểm: {cite.get('rerank_score', 0):.2f}</span>"
+                                st.markdown(
+                                    f"**📍 Nguồn {i + 1} | Trang {cite.get('page', 'N/A')}** {score_badge}",
+                                    unsafe_allow_html=True,
                                 )
-                    except ConnectionError:
-                        st.error(
-                            "🔌 Không thể kết nối với Ollama. Vui lòng bật phần mềm Ollama ở Taskbar."
-                        )
-                    except Exception as e:
-                        st.error(f"⚠️ Lỗi hệ thống Advanced CoRAG: {e}")
+                                highlighted_text = f"""<div style="background-color: rgba(255, 75, 75, 0.1); border-left: 4px solid #ff4b4b; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 0.9em;">{cite.get("content", "")}</div>"""
+                                st.markdown(highlighted_text, unsafe_allow_html=True)
+
+                    if adv_data.get("suggested_questions"):
+                        st.markdown("**💡 Gợi ý câu hỏi:**")
+                        for idx, sq in enumerate(adv_data["suggested_questions"]):
+                            st.button(
+                                sq,
+                                key=f"btn_sugg_{len(st.session_state.messages)}_{idx}",
+                                on_click=set_suggestion,
+                                args=(sq,),
+                            )
+
+                except ConnectionError:
+                    st.error(
+                        "🔌 Không thể kết nối với Ollama. Vui lòng bật phần mềm Ollama ở Taskbar."
+                    )
+                except Exception as e:
+                    st.error(f"⚠️ Lỗi hệ thống Advanced CoRAG: {e}")
 
         # 4.4. Đóng gói dữ liệu và Lưu Database
         try:
