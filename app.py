@@ -110,6 +110,8 @@ with st.sidebar:
     st.markdown("### ⚙️ Cấu hình cắt chữ (Chunking)")
     c_size = st.slider("Chunk Size", 500, 2000, 1000, 100, key="sz")
     c_overlap = st.slider("Chunk Overlap", 50, 500, 100, 50, key="ov")
+
+    use_ocr = st.checkbox("🔍 Bật quét ảnh OCR (Đọc file Scan)", value=False)
     st.divider()
 
     st.markdown("### 💬 Lịch sử trò chuyện")
@@ -128,6 +130,8 @@ with st.sidebar:
             ):
                 st.session_state.current_session_id = sess["id"]
                 st.session_state.messages = get_messages_by_session(sess["id"])
+
+                # [LOGIC MỚI] Nạp lại tài liệu từ bộ nhớ tạm sessions_data
                 sess_info = st.session_state.sessions_data.get(sess["id"], {})
                 st.session_state.vector_store = sess_info.get("vs", None)
                 st.session_state.documents = sess_info.get("docs", None)
@@ -149,6 +153,7 @@ with st.expander("📂 Quản lý Tải lên & Bộ lọc tài liệu", expanded
         "Kéo thả tài liệu vào đây (PDF, DOCX)",
         type=["pdf", "docx"],
         accept_multiple_files=True,
+        key=f"uploader_{st.session_state.current_session_id}",
     )
     current_file_names = (
         set([f.name for f in uploaded_files]) if uploaded_files else set()
@@ -165,7 +170,9 @@ with st.expander("📂 Quản lý Tải lên & Bộ lọc tài liệu", expanded
                     with open(temp_path, "wb") as f:
                         f.write(file.getbuffer())
 
-                    chunks, _ = process_document_data(temp_path, c_size, c_overlap)
+                    chunks, _ = process_document_data(
+                        temp_path, c_size, c_overlap, use_ocr
+                    )
                     base_meta = meta_manager.create_metadata(file.name)
                     for c in chunks:
                         c["metadata"].update(base_meta)
@@ -243,6 +250,7 @@ if show_chat_area:
 
     if st.session_state.vector_store is None:
         if len(st.session_state.messages) > 0:
+            # Trường hợp người dùng F5 hoặc tắt máy mở lại (RAM bị xóa)
             st.warning(
                 "⚠️ Phiên trò chuyện này thuộc về lần truy cập trước. Vui lòng **tải lên lại tài liệu cũ** ở khung phía trên để tiếp tục hỏi đáp."
             )

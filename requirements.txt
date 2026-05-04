@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 easyocr==1.7.2
 langchain_classic==1.0.4
 langchain_community==0.4.1
@@ -9,3 +10,23 @@ pytest==9.0.3
 python_docx==1.2.0
 sentence_transformers==5.4.1
 streamlit==1.55.0
+=======
+easyocr
+langchain_classic
+langchain_community
+langchain_core
+langchain_huggingface
+langchain_ollama
+langchain_text_splitters
+pytest
+python_docx
+sentence_transformers
+streamlit
+langchain_core
+pymupdf
+torch
+torchvision
+torchaudio
+frontend
+rank_bm25
+>>>>>>> 177badb0a8fde53de6412fab6310255764b370b8
