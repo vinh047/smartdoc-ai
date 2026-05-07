@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import re
 import tempfile
@@ -51,29 +52,33 @@ def is_text_good_enough(text: str) -> bool:
     return (alnum_count / max(len(text), 1)) > 0.45
 
 
-def extract_text_with_ocr(page) -> str:
+def extract_text_with_ocr(page, page_index: int = 0) -> str:
     """
-    Trích xuất văn bản từ trang PDF bằng AI Thị giác (EasyOCR).
-    Đã xử lý chống lỗi Permission Denied trên Windows.
+    Trích xuất văn bản từ trang PDF bằng AI Thị giác và LƯU LẠI ẢNH để kiểm tra.
     """
+    # 1. Tạo thư mục lưu trữ nếu chưa có
+    save_dir = "ocr_logs"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    # 2. Tạo tên file theo thời gian và số trang để tránh trùng lặp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"page_{page_index + 1}_{timestamp}.png"
+    save_path = os.path.join(save_dir, filename)
+
+    # 3. Chuyển trang PDF thành ảnh (DPI 220 là mức cân bằng giữa nét và nhẹ)
     pix = page.get_pixmap(dpi=220)
 
-    # Tạo file tạm và đóng ngay để chống Lock file
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    tmp_path = tmp.name
-    tmp.close()
-
     try:
-        pix.save(tmp_path)
+        # 4. Lưu ảnh vĩnh viễn vào thư mục ocr_logs
+        pix.save(save_path)
+        print(f"📸 Đã lưu ảnh trang {page_index + 1} tại: {save_path}")
+        
         print("🔥 Đang quét ảnh bằng EasyOCR...")
-        result = reader.readtext(tmp_path, detail=0, paragraph=True)
+        # Đọc text từ file ảnh vừa lưu
+        result = reader.readtext(save_path, detail=0, paragraph=True)
         return "\n".join(result)
+        
     except Exception as e:
         print(f"❌ Lỗi EasyOCR: {e}")
         return ""
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except:
-                pass

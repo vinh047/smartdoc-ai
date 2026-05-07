@@ -284,9 +284,9 @@ if show_chat_area:
         source_docs = []
         adv_data = {}
 
-        # ---> CỘT 1: Standard RAG (TV3)
+        # ---> CỘT 1: Standard RAG
         with col1:
-            st.markdown("### 🟢 Standard RAG (TV3)")
+            st.markdown("### 🟢 Standard RAG")
             with st.chat_message("assistant"):
                 with st.spinner("Đang truy xuất (Hybrid)..."):
                     try:
@@ -310,12 +310,12 @@ if show_chat_area:
                                         highlighted_text, unsafe_allow_html=True
                                     )
                     except Exception as e:
-                        st.error(f"🔌 Lỗi kết nối AI (TV3): {e}")
+                        st.error(f"🔌 Lỗi kết nối AI: {e}")
                         std_answer = "Xin lỗi, Standard RAG đang gặp sự cố."
 
         # ---> CỘT 2: Advanced CoRAG (TV5) ĐÃ FIX STREAMING
         with col2:
-            st.markdown("### 🚀 Advanced CoRAG (TV5)")
+            st.markdown("### 🚀 Advanced CoRAG")
             with st.chat_message("assistant"):
                 # Bỏ st.spinner bao quanh toàn bộ để không cản trở stream
                 status_placeholder = st.empty()
