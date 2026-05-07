@@ -22,7 +22,7 @@ RETRIEVER_CONFIG = {
 
 # 4. Cấu hình mô hình ngôn ngữ lớn (LLM)
 LLM_CONFIG = {
-    "model": "qwen2.5:3b",       # Mô hình Qwen
+    "model": "qwen2.5:7b",       # Mô hình Qwen
     "temperature": 0.7,          # Độ sáng tạo
     "top_p": 0.9,                # Lấy mẫu Nucleus
     "repeat_penalty": 1.1        # Tránh lặp từ

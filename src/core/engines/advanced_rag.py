@@ -98,19 +98,38 @@ def rerank_documents(
 def evaluate_with_self_rag(
     query: str, context: str, answer: str, llm: Any
 ) -> Dict[str, Any]:
-    eval_template = """Bạn là hệ thống đánh giá Self-RAG. 
-        Dựa vào ngữ cảnh, câu hỏi và câu trả lời dưới đây, hãy chấm điểm độ tự tin (0.0 đến 1.0) và gợi ý 2 câu hỏi tiếp theo.
-        CHỈ TRẢ VỀ JSON BẮT BUỘC THEO ĐÚNG ĐỊNH DẠNG NÀY, KHÔNG GIẢI THÍCH GÌ THÊM:
+    # 1. Phát hiện ngôn ngữ dựa trên câu hỏi của người dùng
+    vietnamese_chars = 'àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệđìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵ'
+    is_vietnamese = any(char in query.lower() for char in vietnamese_chars)
+
+    # 2. Thiết lập Template dựa trên ngôn ngữ phát hiện được
+    if is_vietnamese:
+        eval_template = """Bạn là hệ thống đánh giá Self-RAG. 
+        Nhiệm vụ: Chấm điểm độ tự tin và gợi ý 2 câu hỏi tiếp theo BẰNG TIẾNG VIỆT.
+        CHỈ TRẢ VỀ JSON THEO ĐỊNH DẠNG:
         {{
             "confidence_score": 0.92,
             "suggested_questions": ["câu hỏi 1?", "câu hỏi 2?"]
         }}
-
         Ngữ cảnh: {context}
         Câu hỏi: {query}
-        Câu trả lời AI: {answer}
+        Trả lời: {answer}
         JSON Output:"""
+    else:
+        eval_template = """You are a Self-RAG evaluation system.
+        Task: Score the confidence and suggest 2 follow-up questions IN ENGLISH.
+        ONLY RETURN JSON IN THIS FORMAT:
+        {{
+            "confidence_score": 0.92,
+            "suggested_questions": ["question 1?", "question 2?"]
+        }}
+        Context: {context}
+        Question: {query}
+        Answer: {answer}
+        JSON Output:"""
+
     try:
+        # 3. Thực thi Chain (giữ nguyên logic invoke và xử lý Regex cũ của bạn)
         chain = (
             PromptTemplate(
                 template=eval_template, input_variables=["context", "query", "answer"]
@@ -152,12 +171,18 @@ def run_advanced_rag_pipeline(
 ) -> Dict[str, Any]:
     # 1. Viết lại và tách câu hỏi
     sub_queries = decompose_query(user_question, llm, chat_history)
+    
+    print(f"🔍 [Query Decomposition] Gốc: {user_question}")
+    print(f"🔍 [Query Decomposition] Tách ra: {sub_queries}")
+    
+    if not sub_queries:
+        sub_queries = [user_question]
 
     # 2. Truy xuất và Chấm điểm lại ĐỒNG THỜI
     retriever = setup_hybrid_retriever(vector_store, documents, search_filter)
     unique_top_docs = {}
 
-    with ThreadPoolExecutor(max_workers=min(len(sub_queries), 5)) as executor:
+    with ThreadPoolExecutor(max_workers = max(min(len(sub_queries), 5), 1)) as executor:
         future_to_sq = {
             executor.submit(fetch_and_rerank_task, sq, retriever): sq
             for sq in sub_queries
@@ -200,20 +225,34 @@ def run_advanced_rag_pipeline(
     ]
 
     # 4. Sinh câu trả lời (SỬ DỤNG STREAMING THAY VÌ INVOKE)
-    main_template = """Bạn là chuyên gia phân tích tài liệu. Nhiệm vụ của bạn là trả lời câu hỏi DỰA HOÀN TOÀN vào "Tài liệu trích xuất" bên dưới.
+    vietnamese_chars = 'àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệđìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵ'
+    is_vietnamese = any(char in user_question.lower() for char in vietnamese_chars)
 
-        Quy tắc TỐI THƯỢNG:
+    # 2. Định nghĩa bộ Template song ngữ
+    if is_vietnamese:
+        main_template = """Bạn là chuyên gia phân tích tài liệu. Trả lời câu hỏi DỰA HOÀN TOÀN vào "Ngữ cảnh trích xuất" bên dưới.
+        Nếu thông tin không có trong ngữ cảnh, hãy nói bạn không biết.
+        
+        Quy tắc:
         1. TRẢ LỜI 100% BẰNG TIẾNG VIỆT.
-        2. Không tự ý bịa đặt thông tin ngoài tài liệu.
+        2. Không tự ý bịa đặt thông tin.
 
-        Lịch sử trò chuyện:
-        {chat_history}
-
-        Tài liệu trích xuất: 
-        {context}
-
+        Lịch sử: {chat_history}
+        Ngữ cảnh: {context}
         Câu hỏi: {question}
-        Câu trả lời:"""
+        Trả lời:"""
+    else:
+        main_template = """You are a document analysis expert. Answer the question based SOLELY on the "Extracted Context" below.
+        If the information is not in the context, simply say you don't know.
+        
+        Rules:
+        1. YOU MUST ANSWER IN ENGLISH.
+        2. Do not invent information outside the context.
+
+        History: {chat_history}
+        Context: {context}
+        Question: {question}
+        Answer:"""
 
     chain = (
         PromptTemplate(
